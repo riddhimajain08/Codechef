@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Raja Mantri Chor Sipahi</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="game-container">
+        <h1>Welcome to Raja Mantri</h1>
+        <div id="status"></div>
+        <div id="room-controls">
+            <h2>Create New Room</h2>
+            <input type="text" id="create-name" placeholder="Your Name" required>
+            <button onclick="handleCreateRoom()">Create Room</button>
+            <hr>
+            <h2>Join Existing Room</h2>
+            <input type="text" id="join-room-id" placeholder="Room ID" required>
+            <input type="text" id="join-name" placeholder="Your Name" required>
+            <button onclick="handleJoinRoom()">Join Room</button>
+        </div>
+        <div id="player-list"></div>
+        <div id="game-info"></div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+
+    <script src="game.js"></script>
+</body>
+</html>
