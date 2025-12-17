@@ -1,57 +1,41 @@
-
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const { v4: uuidv4 } = require('uuid');
-const app = express();
-const PORT = 3000;
-
 const http = require('http');
 const { Server } = require('socket.io');
 
-const server = http.createServer(app); // Create an HTTP server using your Express app
+const app = express();
+const PORT = 3000;
+const server = http.createServer(app);
+
+// Enable CORS for both Express and Socket.io
+app.use(cors({ origin: '*', methods: ['GET', 'POST'] }));
+app.use(bodyParser.json());
+
 const io = new Server(server, {
     cors: {
-        origin: "*", // Allows connections from any frontend (good for testing)
+        origin: "*",
         methods: ["GET", "POST"]
     }
 });
 
-// Add Socket.IO Event Handler (New Code Block)
-// **********************************************
 io.on('connection', (socket) => {
-    console.log(`A user connected: ${socket.id}`);
+    console.log(`CLIENT CONNECTED: ${socket.id}`); // Use backticks for template literals
 
-    // --- CRITICAL ADDITION: Handle the 'joinRoom' event from the frontend ---
     socket.on('joinRoom', (roomId) => {
-        socket.join(roomId); // This subscribes the socket to a private channel named 'roomId'
-        console.log(`User ${socket.id} joined Socket.IO channel: ${roomId}`);
+        console.log(`Player ${socket.id} joined room: ${roomId}`);
+        socket.join(roomId);
     });
-    // ------------------------------------------------------------------------
-
-    // Example of a basic connection message
-    socket.emit('message', { text: 'Welcome to Raja Mantri!' });
 
     socket.on('disconnect', () => {
-        console.log('User disconnected');
+        console.log(`CLIENT DISCONNECTED: ${socket.id}`);
     });
 });
 
-app.use(cors({
-    origin: '*', // Allow all origins for simple testing (will allow 127.0.0.1:5501)
-    methods: ['GET', 'POST']
-}));
-
-// Middleware to parse JSON bodies
-app.use(bodyParser.json());
-
 // --- 1. GLOBAL IN-MEMORY STATE ---
-const state = {
-    rooms: {},
-    players: {},
-};
+const state = { rooms: {}, players: {} };
 
-// Helper function to shuffle an array (for role assignment)
 const shuffle = (array) => {
     for (let i = array.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -60,314 +44,220 @@ const shuffle = (array) => {
     return array;
 };
 
-// --- 2. API ENDPOINTS ---
+// Score constants
+const SCORES = { Raja: 1000, Mantri: 800, Sipahi: 500, Chor: 0 };
 
-/**
- * Endpoint: POST /room/create
- * Creates a new room and sets the caller as Player 1.
- * Body: { playerName: "Host Name" }
- * Response: { roomId, playerId, playerName }
- */
+
+// --- 2. API ENDPOINTS ---
 app.post('/room/create', (req, res) => {
-    const { playerName } = req.body;
-    if (!playerName) {
-        return res.status(400).send({ error: "Player name is required." });
-    }
+    const { playerName, totalRounds } = req.body;
+    if (!playerName) return res.status(400).send({ error: "Player name is required." });
 
     const roomId = uuidv4();
     const playerId = uuidv4();
 
-    // Create the Player object
-    state.players[playerId] = {
-        playerId,
-        name: playerName,
-        roomId,
-        role: null,
-        cumulativeScore: 0,
-    };
-
-    // Create the Room object
+    state.players[playerId] = { playerId, name: playerName, roomId, role: null, cumulativeScore: 0, isHost: true }; // Added isHost
     state.rooms[roomId] = {
-        roomId,
-        status: 'WAITING',
-        players: [playerId], // Array of player IDs
-        roles: {},
-        mantriId: null,
-        mantriGuess: null,
-        results: null,
+        roomId, status: 'WAITING', players: [playerId], roles: {}, mantriId: null, mantriGuess: null, results: null,
+        currentRound: 1, totalRounds: parseInt(totalRounds) || 3,
     };
-
-    console.log(`Room created: ${roomId} by ${playerName}`);
+    console.log(`Room Created: ${roomId} by ${playerName}`);
     res.send({ roomId, playerId, playerName });
 });
 
-/**
- * Endpoint: POST /room/join
- * Allows a player to join an existing room.
- * Body: { roomId: "...", playerName: "Guest Name" }
- * Response: { roomId, playerId, playerName }
- */
 app.post('/room/join', (req, res) => {
     const { roomId, playerName } = req.body;
     const room = state.rooms[roomId];
 
-    if (!room) {
-        return res.status(404).send({ error: "Room not found." });
-    }
-
-    if (room.players.length >= 4) {
-        return res.status(403).send({ error: "Room is full (max 4 players)." });
-    }
+    if (!room) return res.status(404).send({ error: "Room not found." });
+    if (room.players.length >= 4) return res.status(403).send({ error: "Room is full (max 4 players)." });
 
     const playerId = uuidv4();
-
-    // Create the Player object
-    state.players[playerId] = {
-        playerId,
-        name: playerName,
-        roomId,
-        role: null,
-        cumulativeScore: 0,
-    };
-
-    // Add player to the Room
+    state.players[playerId] = { playerId, name: playerName, roomId, role: null, cumulativeScore: 0, isHost: false }; // Added isHost
     room.players.push(playerId);
-    const playersInRoom = room.players.map(playerId => state.players[playerId].name);
+
+    console.log(`${playerName} joined room ${roomId}`);
+    
+    const playersInRoom = room.players.map(pid => state.players[pid].name);
     io.to(roomId).emit('playerJoined', { 
-        players: playersInRoom, 
-        count: room.players.length,
-        status: room.status
+        players: playersInRoom, count: room.players.length, status: room.status, 
+        currentRound: room.currentRound, totalRounds: room.totalRounds
     });
 
-    console.log(`${playerName} joined room ${roomId}. Players: ${room.players.length}/4`);
     res.send({ roomId, playerId, playerName });
 });
 
-/**
- * Endpoint: POST /room/assign/:roomId
- * Randomly assigns roles once the room is full.
- * Response: { success: true, status: "PLAYING" }
- */
 app.post('/room/assign/:roomId', (req, res) => {
     const { roomId } = req.params;
     const room = state.rooms[roomId];
 
-    // ... (Validation code is unchanged) ...
+    if (room.players.length !== 4) return res.status(403).send({ error: `Waiting for ${4 - room.players.length} more players.` });
+    if (room.status !== 'WAITING') return res.status(400).send({ error: "Roles already assigned or game in progress." });
 
-    if (room.players.length !== 4) {
-        return res.status(403).send({ error: `Waiting for ${4 - room.players.length} more players.` });
-    }
-    if (room.status !== 'WAITING') {
-        return res.status(400).send({ error: "Roles already assigned or game in progress." });
-    }
-
-    // 1. Prepare roles and shuffle them
     const roles = ['Raja', 'Mantri', 'Chor', 'Sipahi'];
     const shuffledRoles = shuffle([...roles]);
-    
     let mantriId = null;
 
-    // 2. Assign roles to players
     room.players.forEach((playerId, index) => {
         const role = shuffledRoles[index];
-        room.roles[playerId] = role;
         state.players[playerId].role = role;
-
-        if (role === 'Mantri') {
-            mantriId = playerId;
-        }
+        if (role === 'Mantri') mantriId = playerId;
     });
 
-    // 3. Update room state
     room.mantriId = mantriId;
     room.status = 'PLAYING';
     
-    // --- CRITICAL ADDITION: Broadcast to the room that roles are assigned ---
     io.to(roomId).emit('gameUpdate', { 
         status: room.status, 
-        message: "Roles have been assigned. Check your secret role!" 
+        message: `Round ${room.currentRound}/${room.totalRounds}: Roles have been assigned. Check your secret role!` 
     });
-    // ------------------------------------------------------------------------
-
-    console.log(`Roles assigned in room ${roomId}. Mantri ID: ${mantriId}`);
     res.send({ success: true, status: room.status });
 });
 
-/**
- * Endpoint: GET /role/me/:roomId/:playerId
- * Returns the player's assigned role.
- * Response: { role: "..." }
- */
 app.get('/role/me/:roomId/:playerId', (req, res) => {
     const { roomId, playerId } = req.params;
     const player = state.players[playerId];
     const room = state.rooms[roomId];
 
-    if (!player || player.roomId !== roomId) {
-        return res.status(404).send({ error: "Player not found in this room." });
-    }
-    if (!room || room.status !== 'PLAYING') {
-         return res.status(400).send({ error: "Roles not yet assigned." });
-    }
-
-    // This is the private information retrieval
+    if (!player || player.roomId !== roomId) return res.status(404).send({ error: "Player not found in this room." });
+    if (!room || room.status !== 'PLAYING') return res.status(400).send({ error: "Roles not yet assigned." });
     res.send({ role: player.role });
 });
 
-/**
- * Endpoint: POST /guess/:roomId
- * Allows the Mantri to submit their guess for the Chor.
- * Body: { playerId: "Mantri's ID", guessedPlayerId: "ID of the person they think is Chor" }
- * Response: { success: true, message: "Guess submitted." }
- */
+app.get('/game/candidates/:roomId', (req, res) => {
+    const { roomId } = req.params;
+    const room = state.rooms[roomId];
+
+    if (!room || room.status !== 'PLAYING') return res.status(400).send({ error: "Game is not in the active guessing phase." });
+
+    const candidates = room.players
+        .filter(playerId => {
+            const role = state.players[playerId].role;
+            return role !== 'Raja' && role !== 'Mantri';
+        })
+        .map(playerId => ({ id: playerId, name: state.players[playerId].name }));
+
+    const raja = state.players[room.players.find(id => state.players[id].role === 'Raja')].name;
+    const mantri = state.players[room.players.find(id => state.players[id].role === 'Mantri')].name;
+
+    res.send({ success: true, candidates, rajaName: raja, mantriName: mantri });
+});
+
 app.post('/guess/:roomId', (req, res) => {
     const { roomId } = req.params;
     const { playerId, guessedPlayerId } = req.body;
     const room = state.rooms[roomId];
 
-    // ... (Validation code is unchanged) ...
+    if (room.mantriId !== playerId) return res.status(403).send({ error: "Only the Mantri can submit a guess." });
+    
+    console.log(`Mantri in ${roomId} guessed player: ${guessedPlayerId}`);
 
-    // 3. Store the Guess and Update State
     room.mantriGuess = guessedPlayerId;
     room.status = 'RESULTS'; 
+    
+    const results = {};
+    let actualChorId = null;
+    for (const pid of room.players) {
+        if (state.players[pid].role === 'Chor') {
+            actualChorId = pid;
+            break;
+        }
+    }
+    const isGuessCorrect = room.mantriGuess === actualChorId;
+    
+    room.players.forEach(pid => {
+        const role = state.players[pid].role;
+        let score = SCORES[role];
 
-    // --- CRITICAL ADDITION: Broadcast to the room that results are ready ---
+        if (role === 'Raja') score = isGuessCorrect ? SCORES.Raja : 1000;
+        if (role === 'Mantri') score = isGuessCorrect ? SCORES.Mantri : 0;
+        if (role === 'Chor') score = isGuessCorrect ? SCORES.Chor : SCORES.Mantri;
+        if (role === 'Sipahi') score = isGuessCorrect ? SCORES.Sipahi : SCORES.Sipahi; // Sipahi always gets points
+
+        results[state.players[pid].name] = {
+            role: role,
+            score: score,
+        };
+        state.players[pid].cumulativeScore += score;
+    });
+
+    room.results = {
+        round: room.currentRound,
+        roundScores: results,
+        isGuessCorrect: isGuessCorrect,
+        mantriGuessName: state.players[room.mantriGuess].name,
+        actualChorName: state.players[actualChorId].name
+    };
+
     io.to(roomId).emit('gameUpdate', { 
         status: room.status, 
-        message: "Mantri has guessed. Results are ready!" 
+        message: `Round ${room.currentRound} Results Ready!`,
+        roundResults: room.results
     });
-    // ------------------------------------------------------------------------
 
-    console.log(`Mantri (${state.players[playerId].name}) guessed player ID: ${guessedPlayerId}`);
     res.send({ success: true, message: "Guess submitted. Results are ready." });
 });
 
-/**
- * Endpoint: POST /room/reset/:roomId
- * Resets the room status and roles to start a new round.
- * Response: { success: true, status: "WAITING" }
- */
-app.post('/room/reset/:roomId', (req, res) => {
-    const { roomId } = req.params;
-    const room = state.rooms[roomId];
-
-    // ... (Validation code is unchanged) ...
-
-    // Reset the necessary state variables for a new round
-    room.status = 'WAITING'; 
-    room.roles = {};
-    room.mantriId = null;
-    room.mantriGuess = null;
-    room.results = null;
-
-    // Also reset the role for each player object
-    room.players.forEach(playerId => {
-        state.players[playerId].role = null;
-    });
-
-    // --- CRITICAL ADDITION: Broadcast to the room that the game has reset ---
-    io.to(roomId).emit('gameUpdate', { 
-        status: room.status, 
-        message: "Game has been reset! Waiting for roles to be assigned." 
-    });
-    // ------------------------------------------------------------------------
-
-    console.log(`Room ${roomId} reset for a new round.`);
-    res.send({ success: true, status: room.status });
-});
-
-// Score constants (Ensure this is at the top level, or include it here if you didn't before)
-const SCORES = { Raja: 1000, Mantri: 800, Sipahi: 500, Chor: 0 };
-
-/**
- * Endpoint: GET /result/:roomId
- * Reveals roles and calculates points for the round.
- * Response: { success: true, results: { playerName: { role, score } } }
- */
+// The /result endpoint is now mostly for fetching the calculated results (optional but kept for robustness)
 app.get('/result/:roomId', (req, res) => {
     const { roomId } = req.params;
     const room = state.rooms[roomId];
 
-    if (!room) {
-        return res.status(404).send({ error: "Room not found." });
-    }
-    if (room.status !== 'RESULTS') {
-        return res.status(400).send({ error: "Results are not ready. Mantri must submit a guess." });
-    }
-    
-    const results = {};
-    let actualChorId = null;
-
-    // 1. Find the actual Chor
-    for (const playerId of room.players) {
-        if (room.roles[playerId] === 'Chor') {
-            actualChorId = playerId;
-            break;
-        }
-    }
-
-    const isGuessCorrect = room.mantriGuess === actualChorId;
-
-    // 2. Calculate scores for each player
-    room.players.forEach(playerId => {
-        const role = room.roles[playerId];
-        let score = SCORES[role]; // Start with base score
-
-        if (role === 'Mantri') {
-            // Raja only gets points if the guess is CORRECT
-            score = isGuessCorrect ? SCORES.Mantri : 0;
-        } 
-        
-        if (role === 'Chor') {
-            // Chor gets the Raja's points (1000) if the guess is INCORRECT
-            score = isGuessCorrect ? SCORES.Chor : SCORES.Mantri;
-        }
-        
-        // Mantri and Sipahi scores (800 and 500) are guaranteed regardless of guess outcome.
-
-        results[state.players[playerId].name] = {
-            role: role,
-            score: score
-        };
-
-        // Update cumulative score (optional)
-        state.players[playerId].cumulativeScore += score;
-    });
-
-    console.log(`Room ${roomId} results calculated. Mantri was ${isGuessCorrect ? 'CORRECT' : 'INCORRECT'}.`);
-    res.send({ success: true, results: results });
+    if (!room || room.status !== 'RESULTS' || !room.results) return res.status(400).send({ error: "Results are not ready or game state is invalid." });
+    res.send({ success: true, results: room.results });
 });
 
-/**
- * Endpoint: GET /leaderboard/:roomId
- * Returns the cumulative scores for all players in the room, sorted high to low.
- * Response: { success: true, leaderboard: [{ name, score }] }
- */
+
+app.post('/room/reset/:roomId', (req, res) => {
+    const { roomId } = req.params;
+    const room = state.rooms[roomId];
+    
+    if (!room) return res.status(404).send({ error: "Room not found." });
+
+    if (room.currentRound >= room.totalRounds) {
+        room.status = 'FINISHED';
+        io.to(roomId).emit('gameUpdate', { status: room.status, message: "GAME OVER! Final scores are ready." });
+        return res.send({ success: true, status: room.status });
+    }
+
+    room.currentRound += 1;
+    room.status = 'WAITING'; 
+    room.mantriId = null;
+    room.mantriGuess = null;
+    room.results = null;
+
+    room.players.forEach(pid => {
+        state.players[pid].role = null;
+    });
+
+    const playersInRoom = room.players.map(pid => state.players[pid].name);
+    io.to(roomId).emit('playerJoined', { // Use playerJoined to refresh status/player list
+        players: playersInRoom, count: room.players.length, status: room.status, 
+        currentRound: room.currentRound, totalRounds: room.totalRounds
+    });
+
+    res.send({ success: true, status: room.status });
+});
+
 app.get('/leaderboard/:roomId', (req, res) => {
     const { roomId } = req.params;
     const room = state.rooms[roomId];
 
-    if (!room) {
-        return res.status(404).send({ error: "Room not found." });
-    }
+    if (!room) return res.status(404).send({ error: "Room not found." });
 
-    // 1. Map player IDs to name and score
-    const leaderboard = room.players.map(playerId => {
-        const player = state.players[playerId];
-        return {
-            name: player.name,
-            score: player.cumulativeScore // Uses the score updated in /result
-        };
-    });
+    const leaderboard = room.players.map(pid => ({
+        name: state.players[pid].name,
+        score: state.players[pid].cumulativeScore,
+        isHost: state.players[pid].isHost // Send host status too
+    }));
 
-    // 2. Sort the leaderboard (highest score first)
     leaderboard.sort((a, b) => b.score - a.score);
 
     res.send({ success: true, leaderboard: leaderboard });
 });
 
-
-// --- 3. START THE SERVER --- (Modified)
-server.listen(PORT, () => { // Use 'server' instead of 'app' to listen
-    console.log(`Raja Mantri backend running on http://localhost:${PORT}`);
+// --- 3. START THE SERVER ---
+const DEPLOYMENT_PORT = process.env.PORT || PORT;
+server.listen(DEPLOYMENT_PORT, () => { 
+    console.log(`Raja Mantri backend running on http://localhost:${DEPLOYMENT_PORT}`);
 });
