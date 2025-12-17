@@ -3,28 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <title>Raja Mantri Chor Sipahi</title>
-    <link rel="stylesheet" href="styles.css">
-</head>
+    </head>
 <body>
-    <div id="game-container">
+    <div id="game-container" style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: sans-serif;">
         <h1>Welcome to Raja Mantri</h1>
-        <div id="status"></div>
+        
+        <div id="status" style="padding: 10px; margin-bottom: 15px; border: 1px solid #ddd;"></div>
+        
         <div id="room-controls">
             <h2>Create New Room</h2>
-            <input type="text" id="create-name" placeholder="Your Name" required>
-            <button onclick="handleCreateRoom()">Create Room</button>
+            <input type="text" id="create-name" placeholder="Your Name" required style="padding: 8px; margin-bottom: 10px; width: 90%;">
+            <button onclick="handleCreateRoom()" style="padding: 10px 15px; background-color: #f0ad4e; color: black; border: none; cursor: pointer;">Create Room</button>
             <hr>
             <h2>Join Existing Room</h2>
-            <input type="text" id="join-room-id" placeholder="Room ID" required>
-            <input type="text" id="join-name" placeholder="Your Name" required>
-            <button onclick="handleJoinRoom()">Join Room</button>
+            <input type="text" id="join-room-id" placeholder="Room ID" required style="padding: 8px; margin-bottom: 10px; width: 90%;">
+            <input type="text" id="join-name" placeholder="Your Name" required style="padding: 8px; margin-bottom: 10px; width: 90%;">
+            <button onclick="handleJoinRoom()" style="padding: 10px 15px; background-color: #007bff; color: white; border: none; cursor: pointer;">Join Room</button>
         </div>
-        <div id="player-list"></div>
-        <div id="game-info"></div>
+        
+        <div id="public-info" style="margin-top: 20px;"></div> 
+        
+        <div id="player-list" style="margin-top: 15px;"></div>
+        <div id="game-info" style="margin-top: 20px;"></div>
+
     </div>
 
     <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
-
     <script src="game.js"></script>
 </body>
 </html>
